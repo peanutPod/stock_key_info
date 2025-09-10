@@ -40,6 +40,7 @@ stocks=[
 
     {"stock_name":"国药一致","stock_id": "000028","stock_id_with_market_end": "000028.SZ"},
 
+    {"stock_name":"新希望","stock_id": "000876","stock_id_with_market_end": "000876.SZ"},
 
 
 ]

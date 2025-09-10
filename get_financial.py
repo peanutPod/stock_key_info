@@ -1,7 +1,7 @@
 import utils
 import pandas as pd
 import os
-from position import stocks
+from wuliu import stocks
 #update
 # pip install akshare --upgrade -i https://pypi.org/simple
 
@@ -10,7 +10,7 @@ g_start_md="0101"
 g_end_year = "2025"
 g_end_md="0906"
 cur_ratio = 0.5
-dir_name="持股"
+dir_name="wuliu"
 
 
 
@@ -31,26 +31,26 @@ if __name__ =="__main__":
         # 获取各数据
         stock_base_info = utils.get_stock_info(stock_id)
         key_indicator_ths = utils.get_key_indicator_ths(stock_id, start_year, end_year)
-        # gdhs = utils.get_gdhs(stock_id, start_date=start_year+start_md, end_date=end_year+end_md)
+        sxl = utils.get_sxl(stock_id, start_date=start_year+start_md, end_date=end_year+end_md)
         gdqy = utils.get_gdqy(stock_id, start_year, end_year)
-        zgb = utils.get_every_zgb(stock_id_with_market_end, start_year, end_year)
+        # zgb = utils.get_every_zgb(stock_id_with_market_end, start_year, end_year)
         year_price=utils.get_year_gj(stock_id, start_year, end_year)
 
         # 提取年份
         key_indicator_ths["年份"] = key_indicator_ths["报告期"].astype(str).str[:4].astype(int)
-        # gdhs["年份"] = gdhs["股东户数统计截止日"].dt.year
+        sxl["年份"] = sxl["数据日期"].dt.year
         gdqy["年份"] = gdqy["报告期"].astype(str).str[:4].astype(int)
         year_price["年份"] = year_price["日期"].dt.year
 
         # 按年份合并
         merged_df = key_indicator_ths.copy()
-        # merged_df = pd.merge(merged_df, gdhs, on="年份", how="left")
+        merged_df = pd.merge(merged_df, sxl, on="年份", how="left")
         merged_df = pd.merge(merged_df, gdqy, on="年份", how="left")
-        merged_df = pd.merge(merged_df, zgb, on="年份", how="left")
+        # merged_df = pd.merge(merged_df, zgb, on="年份", how="left")
         merged_df = pd.merge(merged_df, year_price, on="年份", how="left")
 
 
-        drop_field=["报告期_y","年份","股票代码","股东户数统计截止日", '股东户数-本次', '扣非净利润', '扣非净利润同比增长率', '上市时间',"日期"]
+        drop_field=["报告期_y","年份","股票代码","股东户数统计截止日", '股东户数-本次', '扣非净利润', '扣非净利润同比增长率', '上市时间',"日期","数据日期"]
         merged_df = merged_df.drop(columns=drop_field, errors='ignore')
 
         # 修改报告期_x 列名为 报告期
@@ -73,25 +73,9 @@ if __name__ =="__main__":
 
         # 应用转换函数
         merged_df["营业总收入(亿)"] = merged_df["营业总收入(亿)"].apply(convert_revenue)
+        merged_df["总市值"] = round(merged_df["总市值"]/1e8,2)
 
         
-        # selected_columns = ['报告期', '未分配利润', '营业总收入', '营业总收入同比增长率', '净利润', '净利润同比增长率', '每股净资产', '每股经营现金流', '销售净利率', '户均持股市值', '股东户数-增减比例', '股东权益', '存货', '总现金', '总股本', '收盘']
-        # merged_df = merged_df[selected_columns]
-
-        # 计算市值和市销率
-        merged_df["市值"] = round (merged_df["总股本"] *merged_df["收盘"],2)
-
-        # 转换为数值类型，处理非数值项
-        # merged_df["营业总收入"] = pd.to_numeric(merged_df["营业总收入"], errors='coerce')   
-
-        # 计算市销率
-        merged_df["市销率"] = merged_df["市值"] / pd.to_numeric(merged_df["营业总收入(亿)"], errors='coerce')
-
-
-
-        # 提取最近年份
-        latest_year = merged_df["报告期"].str[:4].astype(int).max()
-        merged_df.loc[merged_df["报告期"].str[:4].astype(int) == latest_year, "市销率"] *= cur_ratio
 
         os.makedirs(dir_name, exist_ok=True)
         # 保存到csv
