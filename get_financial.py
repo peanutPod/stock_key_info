@@ -1,25 +1,24 @@
 import utils
 import pandas as pd
 import os
-from wuliu import stocks
-#update
+from tmt import stocks
+
+# update
 # pip install akshare --upgrade -i https://pypi.org/simple
 
 g_start_year = "2015"
-g_start_md="0101"
+g_start_md = "0101"
 g_end_year = "2025"
-g_end_md="0906"
+g_end_md = "0906"
 cur_ratio = 0.5
-dir_name="wuliu"
+dir_name = "TMT"
 
 
-
-if __name__ =="__main__":
+if __name__ == "__main__":
 
     for stock in stocks:
         print(f"Processing stock: {stock['stock_id']}")
         stock_id = stock["stock_id"]
-        # stock_id_with_market = stock["stock_id_with_market"]
         stock_id_with_market_end = stock["stock_id_with_market_end"]
         start_year = g_start_year
         start_md = g_start_md
@@ -31,10 +30,9 @@ if __name__ =="__main__":
         # 获取各数据
         stock_base_info = utils.get_stock_info(stock_id)
         key_indicator_ths = utils.get_key_indicator_ths(stock_id, start_year, end_year)
-        sxl = utils.get_sxl(stock_id, start_date=start_year+start_md, end_date=end_year+end_md)
+        sxl = utils.get_sxl(stock_id, start_date=start_year + start_md, end_date=end_year + end_md)
         gdqy = utils.get_gdqy(stock_id, start_year, end_year)
-        # zgb = utils.get_every_zgb(stock_id_with_market_end, start_year, end_year)
-        year_price=utils.get_year_gj(stock_id, start_year, end_year)
+        year_price = utils.get_year_gj(stock_id, start_year, end_year)
 
         # 提取年份
         key_indicator_ths["年份"] = key_indicator_ths["报告期"].astype(str).str[:4].astype(int)
@@ -49,12 +47,27 @@ if __name__ =="__main__":
         # merged_df = pd.merge(merged_df, zgb, on="年份", how="left")
         merged_df = pd.merge(merged_df, year_price, on="年份", how="left")
 
-
-        drop_field=["报告期_y","年份","股票代码","股东户数统计截止日", '股东户数-本次', '扣非净利润', '扣非净利润同比增长率', '上市时间',"日期","数据日期"]
-        merged_df = merged_df.drop(columns=drop_field, errors='ignore')
+        drop_field = [
+            "报告期_y",
+            "年份",
+            "股票代码",
+            "股东户数统计截止日",
+            "股东户数-本次",
+            "扣非净利润",
+            "扣非净利润同比增长率",
+            "上市时间",
+            "日期",
+            "数据日期",
+        ]
+        merged_df = merged_df.drop(columns=drop_field, errors="ignore")
 
         # 修改报告期_x 列名为 报告期
-        rename_field={"报告期_x": "报告期", "*所有者权益（或股东权益）合计": "股东权益","营业总收入":"营业总收入(亿)","净利润":"净利润(亿)"}
+        rename_field = {
+            "报告期_x": "报告期",
+            "*所有者权益（或股东权益）合计": "股东权益",
+            "营业总收入": "营业总收入(亿)",
+            "净利润": "净利润(亿)",
+        }
         merged_df = merged_df.rename(columns=rename_field)
 
         # 确保报告期为字符串
@@ -64,18 +77,47 @@ if __name__ =="__main__":
         merged_df = merged_df.sort_values(by=["报告期"], ascending=[False])
 
         # 处理营业总收入，将“亿”转换为浮点数并支持“万”
-        def convert_revenue(value):
-            if "亿" in value:
-                return float(value.replace("亿", "").strip())  # 去掉“亿”并转换为浮点数
-            elif "万" in value:
-                return float(value.replace("万", "").strip()) / 10000  # 去掉“万”并转换为浮点数，同时转换为亿
-            return None  # 处理无效情况
+        # def convert_revenue(value):
+        #     if "亿" in value:
+        #         return float(value.replace("亿", "").strip())  # 去掉“亿”并转换为浮点数
+        #     elif "万" in value:
+        #         return float(value.replace("万", "").strip()) / 10000  # 去掉“万”并转换为浮点数，同时转换为亿
+        #     else:
+        #         return float(value)
 
         # 应用转换函数
-        merged_df["营业总收入(亿)"] = merged_df["营业总收入(亿)"].apply(convert_revenue)
-        merged_df["总市值"] = round(merged_df["总市值"]/1e8,2)
+        # print(merged_df["营业总收入(亿)"])
+        # merged_df["营业总收入(亿)"] = merged_df["营业总收入(亿)"].apply(convert_revenue)
+        merged_df["总市值"] = round(merged_df["总市值"] / 1e8, 2)
 
-        
+        # ['报告期', '营业总收入(亿)', '营业总收入同比增长率', '净利润(亿)', '净利润同比增长率', '每股净资产', '每股经营现金流', '销售净利率', '总市值', '总股本', '市销率', 'PEG值', '股东权益', '存货', '总现金', '未分配利润', '收盘']
+        # [  ]
+
+        selected_columns = [
+            "报告期",
+            "总市值",
+            "收盘",
+            "市销率",
+            "PEG值",
+            "营业总收入(亿)",
+            "营业总收入同比增长率",
+            "净利润(亿)",
+            "净利润同比增长率",
+            "每股净资产",
+            "总现金",
+            "未分配利润",
+            # "每股经营现金流",
+            "销售净利率",
+            # "总股本",
+            "股东权益",
+            "存货",
+        ]
+
+        # 筛选出实际存在于DataFrame中的列
+        existing_columns = [col for col in selected_columns if col in merged_df.columns]
+
+        # 只选择存在的列
+        merged_df = merged_df[existing_columns]
 
         os.makedirs(dir_name, exist_ok=True)
         # 保存到csv
