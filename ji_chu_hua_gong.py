@@ -1,4 +1,5 @@
-stocks=[{"stock_name":"XD 中国石","stock_id": "600028","stock_id_with_market_end": "600028.SH"},
+stocks=[
+{"stock_name":"中国石化","stock_id": "600028","stock_id_with_market_end": "600028.SH"},
 {"stock_name":"上海能源","stock_id": "600508","stock_id_with_market_end": "600508.SH"},
 {"stock_name":"安泰科技","stock_id": "000969","stock_id_with_market_end": "000969.SZ"},
 {"stock_name":"万凯新材","stock_id": "301216","stock_id_with_market_end": "301216.SZ"},

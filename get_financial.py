@@ -1,7 +1,7 @@
 import utils
 import pandas as pd
 import os
-from tmt import stocks
+from position import stocks
 
 # update
 # pip install akshare --upgrade -i https://pypi.org/simple
@@ -11,7 +11,7 @@ g_start_md = "0101"
 g_end_year = "2025"
 g_end_md = "0906"
 cur_ratio = 0.5
-dir_name = "TMT"
+dir_name = "test"
 
 
 if __name__ == "__main__":
@@ -28,10 +28,10 @@ if __name__ == "__main__":
         stock_name = stock["stock_name"]
 
         # 获取各数据
-        stock_base_info = utils.get_stock_info(stock_id)
         key_indicator_ths = utils.get_key_indicator_ths(stock_id, start_year, end_year)
-        sxl = utils.get_sxl(stock_id, start_date=start_year + start_md, end_date=end_year + end_md)
         gdqy = utils.get_gdqy(stock_id, start_year, end_year)
+
+        sxl = utils.get_sxl(stock_id, start_date=start_year + start_md, end_date=end_year + end_md)
         year_price = utils.get_year_gj(stock_id, start_year, end_year)
 
         # 提取年份
@@ -77,25 +77,33 @@ if __name__ == "__main__":
         merged_df = merged_df.sort_values(by=["报告期"], ascending=[False])
 
         # 处理营业总收入，将“亿”转换为浮点数并支持“万”
-        # def convert_revenue(value):
-        #     if "亿" in value:
-        #         return float(value.replace("亿", "").strip())  # 去掉“亿”并转换为浮点数
-        #     elif "万" in value:
-        #         return float(value.replace("万", "").strip()) / 10000  # 去掉“万”并转换为浮点数，同时转换为亿
-        #     else:
-        #         return float(value)
+        def convert_revenue(value):
+            if "亿" in value:
+                if "万亿" in value:
+                    return float(value.replace("万亿", "").strip()) * 10000  # 去掉“万亿”并转换为浮点数，同时转换为亿
+                else:
+                    return float(value.replace("亿", "").strip())  # 去掉“亿”并转换为浮点数
+            elif "万" in value:
+                return float(value.replace("万", "").strip()) / 10000  # 去掉“万”并转换为浮点数，同时转换为亿
+            else:
+                return float(value)
 
         # 应用转换函数
         # print(merged_df["营业总收入(亿)"])
-        # merged_df["营业总收入(亿)"] = merged_df["营业总收入(亿)"].apply(convert_revenue)
-        merged_df["总市值"] = round(merged_df["总市值"] / 1e8, 2)
+        merged_df["营业总收入(亿)"] = merged_df["营业总收入(亿)"].apply(convert_revenue)
 
-        # ['报告期', '营业总收入(亿)', '营业总收入同比增长率', '净利润(亿)', '净利润同比增长率', '每股净资产', '每股经营现金流', '销售净利率', '总市值', '总股本', '市销率', 'PEG值', '股东权益', '存货', '总现金', '未分配利润', '收盘']
-        # [  ]
+        merged_df["总市值"]=round(merged_df["总股本"] * merged_df["收盘"],3) 
+
+        merged_df["市销率"]=round(merged_df["总市值"]*1.0 / (merged_df["营业总收入(亿)"]*1.0),4)
+
+        # 将第一个数据乘以0.5
+        if not merged_df.empty:  # 确保DataFrame不为空
+            merged_df.iloc[0, merged_df.columns.get_loc("市销率")] *= cur_ratio
 
         selected_columns = [
             "报告期",
             "总市值",
+            "总股本",
             "收盘",
             "市销率",
             "PEG值",
@@ -106,9 +114,7 @@ if __name__ == "__main__":
             "每股净资产",
             "总现金",
             "未分配利润",
-            # "每股经营现金流",
             "销售净利率",
-            # "总股本",
             "股东权益",
             "存货",
         ]
