@@ -1,7 +1,8 @@
 import utils
 import pandas as pd
 import os
-from position import stocks
+from yi_shi_zhu_xing import stocks
+dir_name = "衣食住行"
 
 # update
 # pip install akshare --upgrade -i https://pypi.org/simple
@@ -11,7 +12,6 @@ g_start_md = "0101"
 g_end_year = "2025"
 g_end_md = "0906"
 cur_ratio = 0.5
-dir_name = "test"
 
 
 if __name__ == "__main__":
@@ -19,7 +19,6 @@ if __name__ == "__main__":
     for stock in stocks:
         print(f"Processing stock: {stock['stock_id']}")
         stock_id = stock["stock_id"]
-        stock_id_with_market_end = stock["stock_id_with_market_end"]
         start_year = g_start_year
         start_md = g_start_md
         end_year = g_end_year

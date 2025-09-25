@@ -161,7 +161,15 @@ def get_sxl(stock_id, start_date: str = "19700101", end_date: str = "20500101"):
     """查询股东户数，按日期区间筛选，并保存为csv"""
 
     # 尝试获取股票详细信息
-    df = ak.stock_value_em(symbol=stock_id)
+    # df = ak.stock_value_em(symbol=stock_id)
+    try:
+        # 尝试获取数据
+        df = ak.stock_value_em(symbol=stock_id)
+    except Exception as e:
+        # 捕获所有可能的异常并打印信息
+        return None
+
+
 
     df["数据日期"] = pd.to_datetime(df["数据日期"])
     # 按日期区间筛选
@@ -169,7 +177,7 @@ def get_sxl(stock_id, start_date: str = "19700101", end_date: str = "20500101"):
     end_dt = pd.to_datetime(end_date, format="%Y%m%d")
     df = df[df["数据日期"].between(start_dt, end_dt)]
     # 只保留需要的字段
-    df = df[["数据日期", "总股本", "PEG值"]]
+    df = df[["数据日期", "总股本"]]
     # df = df[["数据日期", "总股本", "PEG值"]]
     # 户均持股市值换算成万元，保留两位有效数字
     df["总股本"] = (df["总股本"] / 1e8).round(4)

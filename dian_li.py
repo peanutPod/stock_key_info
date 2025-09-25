@@ -42,4 +42,6 @@ stocks = [
     {"stock_name": "电气风电", "stock_id": "688660", "stock_id_with_market_end": "688660.SH"},
     {"stock_name": "隆基绿能", "stock_id": "601012", "stock_id_with_market_end": "601012.SH"},
     {"stock_name": "通威股份", "stock_id": "600438", "stock_id_with_market_end": "600438.SH"},
+    {"stock_name":"国网英大","stock_id": "600517","stock_id_with_market_end": "600517.SH"},
+
 ]
