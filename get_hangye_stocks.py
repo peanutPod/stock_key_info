@@ -140,6 +140,26 @@ for industry, group in industry_groups:
                 merged_df["净利润(亿)"] = merged_df["净利润(亿)"].apply(convert_revenue)
 
 
+           # 提取前4条数据
+            top4_data = merged_df.head(4).copy()
+
+            # 对第一条数据应用条件：营业总收入(亿) > 1.5，净利润(亿) > 0.5
+            first_valid = (
+                (top4_data.iloc[0]["营业总收入(亿)"] > 1.5) &
+                (top4_data.iloc[0]["净利润(亿)"] > 0.5)
+            )
+
+            # 对后续三条数据应用条件：营业总收入(亿) > 3，净利润(亿) > 1
+            subsequent_valid = True
+            for i in range(1, 4):
+                if not (
+                    (top4_data.iloc[i]["营业总收入(亿)"] > 3) &
+                    (top4_data.iloc[i]["净利润(亿)"] > 1)
+                ):
+                    subsequent_valid = False
+            if not(first_valid and subsequent_valid) :
+                continue
+
             # 计算总市值和市销率
             if "总股本" in merged_df.columns and "收盘" in merged_df.columns:
                 merged_df["总市值"] = round(merged_df["总股本"] * merged_df["收盘"], 3)
