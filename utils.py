@@ -1,6 +1,87 @@
 import akshare as ak
 import matplotlib.pyplot as plt
 import pandas as pd
+import time
+
+
+RETRY_TIMES = 5
+RETRY_SLEEP_SECONDS = 2
+
+
+def _call_with_retry(func, *args, **kwargs):
+    last_error = None
+    for attempt in range(RETRY_TIMES):
+        try:
+            return func(*args, **kwargs)
+        except Exception as exc:
+            last_error = exc
+            if attempt == RETRY_TIMES - 1:
+                raise
+            time.sleep(RETRY_SLEEP_SECONDS)
+    raise last_error
+
+
+def _build_providers(candidates):
+    providers = []
+    for name, func_name, kwargs in candidates:
+        func = getattr(ak, func_name, None)
+        if func is None:
+            continue
+        providers.append((name, func, kwargs))
+    return providers
+
+
+def _call_with_fallbacks(providers, validator=None):
+    errors = []
+    for name, func, kwargs in providers:
+        try:
+            df = _call_with_retry(func, **kwargs)
+        except Exception as exc:
+            errors.append(f"{name}:{type(exc).__name__}")
+            continue
+        if validator is not None and not validator(df):
+            errors.append(f"{name}:empty")
+            continue
+        return df, name
+    if errors:
+        raise RuntimeError("all providers failed: " + "; ".join(errors))
+    raise RuntimeError("no providers available")
+
+
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = df.copy()
+    normalized.columns = [str(col).replace(" ", "") for col in normalized.columns]
+    return normalized
+
+
+def _select_existing_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    existing_columns = [col for col in columns if col in df.columns]
+    return df[existing_columns]
+
+
+def _is_non_empty_df(df: pd.DataFrame) -> bool:
+    return df is not None and isinstance(df, pd.DataFrame) and not df.empty
+
+
+def _filter_report_years(df: pd.DataFrame, start_year: str, end_year: str) -> pd.DataFrame:
+    result = df.copy()
+    report_year = result["报告期"].astype(str).str[:4].astype(int)
+    return result[report_year.between(int(start_year), int(end_year))]
+
+
+def _merge_annual_with_latest_report(annual_df: pd.DataFrame, report_df: pd.DataFrame, end_year: str) -> pd.DataFrame:
+    annual_df = annual_df.sort_values("报告期", ascending=False)
+    report_df = report_df.sort_values("报告期", ascending=False)
+    non_annual_report_df = report_df[~report_df["报告期"].astype(str).str.endswith("-12-31")]
+
+    if not non_annual_report_df.empty:
+        latest_report = non_annual_report_df.head(1)
+        latest_year = int(str(latest_report.iloc[0]["报告期"])[:4])
+        if latest_year == int(end_year):
+            annual_df = annual_df[annual_df["报告期"].astype(int) < int(end_year)]
+        return pd.concat([latest_report, annual_df], ignore_index=True)
+
+    return annual_df.reset_index(drop=True)
 
 
 
@@ -48,7 +129,17 @@ def get_key_indicator_ths(stock_id: str, start_time, end_time,debug=False):
     只保留报告期在 start_time 和 end_time 之间的数据
     """
     # 年度数据
-    annual_df = ak.stock_financial_abstract_ths(symbol=stock_id, indicator="按年度")
+    annual_providers = _build_providers(
+        [
+            ("ths", "stock_financial_abstract_ths", {"symbol": stock_id, "indicator": "按年度"}),
+            ("em", "stock_financial_abstract_em", {"symbol": stock_id, "indicator": "按年度"}),
+            ("sina", "stock_financial_abstract_sina", {"symbol": stock_id, "indicator": "按年度"}),
+            ("tx", "stock_financial_abstract_tx", {"symbol": stock_id, "indicator": "按年度"}),
+            ("netease", "stock_financial_abstract_163", {"symbol": stock_id, "indicator": "按年度"}),
+        ]
+    )
+    annual_df, _ = _call_with_fallbacks(annual_providers, validator=_is_non_empty_df)
+    annual_df = _normalize_columns(annual_df)
     if debug:
         print("get_key_indicator_ths 的字段名:", annual_df.columns.tolist())
     selected_columns = [
@@ -63,20 +154,24 @@ def get_key_indicator_ths(stock_id: str, start_time, end_time,debug=False):
         "每股经营现金流",
         "销售净利率",
     ]
-    annual_df = annual_df[selected_columns]
-    # 只保留报告期在 start_time 和 end_time 之间的数据
-    annual_df = annual_df[annual_df["报告期"].astype(int).between(int(start_time), int(end_time))]
-    annual_df = annual_df.sort_values("报告期", ascending=False)
+    annual_df = _select_existing_columns(annual_df, selected_columns)
+    annual_df = _filter_report_years(annual_df, start_time, end_time)
 
-    # 按报告期数据，只取最新一期
-    report_df = ak.stock_financial_abstract_ths(symbol=stock_id, indicator="按报告期")
-    report_df = report_df[selected_columns]
-    report_df = report_df.sort_values("报告期", ascending=False)
-    latest_report = report_df.head(1)
+    report_providers = _build_providers(
+        [
+            ("ths", "stock_financial_abstract_ths", {"symbol": stock_id, "indicator": "按报告期"}),
+            ("em", "stock_financial_abstract_em", {"symbol": stock_id, "indicator": "按报告期"}),
+            ("sina", "stock_financial_abstract_sina", {"symbol": stock_id, "indicator": "按报告期"}),
+            ("tx", "stock_financial_abstract_tx", {"symbol": stock_id, "indicator": "按报告期"}),
+            ("netease", "stock_financial_abstract_163", {"symbol": stock_id, "indicator": "按报告期"}),
+        ]
+    )
+    report_df, _ = _call_with_fallbacks(report_providers, validator=_is_non_empty_df)
+    report_df = _normalize_columns(report_df)
+    report_df = _select_existing_columns(report_df, selected_columns)
+    report_df = _filter_report_years(report_df, start_time, end_time)
 
-    # 合并年度和最新报告期数据
-    merged_df = pd.concat([latest_report, annual_df], ignore_index=True)
-    return merged_df
+    return _merge_annual_with_latest_report(annual_df, report_df, end_time)
 
 
 def plot_close_price_trend(stock_id, start_time, end_time):
@@ -108,7 +203,17 @@ def get_gdqy(stock_id, start_year, end_year,debug=False):
     columns_to_keep = ["报告期", "*所有者权益（或股东权益）合计", "存货", "总现金", "未分配利润"]
 
     # 年度数据
-    annual_df = ak.stock_financial_debt_ths(symbol=stock_id, indicator="按年度")
+    annual_providers = _build_providers(
+        [
+            ("ths", "stock_financial_debt_ths", {"symbol": stock_id, "indicator": "按年度"}),
+            ("em", "stock_financial_debt_em", {"symbol": stock_id, "indicator": "按年度"}),
+            ("sina", "stock_financial_debt_sina", {"symbol": stock_id, "indicator": "按年度"}),
+            ("tx", "stock_financial_debt_tx", {"symbol": stock_id, "indicator": "按年度"}),
+            ("netease", "stock_financial_debt_163", {"symbol": stock_id, "indicator": "按年度"}),
+        ]
+    )
+    annual_df, _ = _call_with_fallbacks(annual_providers, validator=_is_non_empty_df)
+    annual_df = _normalize_columns(annual_df)
 
     # 仅保留存在的列
     existing_columns = [col for col in columns_to_keep if col in annual_df.columns]
@@ -117,25 +222,128 @@ def get_gdqy(stock_id, start_year, end_year,debug=False):
     if debug:
         print("get_gdqy 的字段名:", annual_df.columns.tolist())
 
-    annual_df = annual_df[annual_df["报告期"].astype(int).between(int(start_year), int(end_year))]
-    annual_df = annual_df.sort_values("报告期", ascending=False)
+    annual_df = _filter_report_years(annual_df, start_year, end_year)
 
-    # 按报告期数据，只取最新一期
-    report_df = ak.stock_financial_debt_ths(symbol=stock_id, indicator="按报告期")
+    report_providers = _build_providers(
+        [
+            ("ths", "stock_financial_debt_ths", {"symbol": stock_id, "indicator": "按报告期"}),
+            ("em", "stock_financial_debt_em", {"symbol": stock_id, "indicator": "按报告期"}),
+            ("sina", "stock_financial_debt_sina", {"symbol": stock_id, "indicator": "按报告期"}),
+            ("tx", "stock_financial_debt_tx", {"symbol": stock_id, "indicator": "按报告期"}),
+            ("netease", "stock_financial_debt_163", {"symbol": stock_id, "indicator": "按报告期"}),
+        ]
+    )
+    report_df, _ = _call_with_fallbacks(report_providers, validator=_is_non_empty_df)
+    report_df = _normalize_columns(report_df)
     report_df = report_df[existing_columns]
-    report_df = report_df.sort_values("报告期", ascending=False)
-    latest_report = report_df.head(1)
+    report_df = _filter_report_years(report_df, start_year, end_year)
 
-    # 合并年度和最新报告期数据
-    merged_df = pd.concat([latest_report, annual_df], ignore_index=True)
-    return merged_df
+    return _merge_annual_with_latest_report(annual_df, report_df, end_year)
 
 
 
-def get_year_gj(stock_id, start_year="2020", end_year="2025"):
+def get_year_gj_dfcf(stock_id, start_year="2020", end_year="2025"):
     # 获取股票历史数据
-    stock_zh_a_hist_df = ak.stock_zh_a_hist(
-        symbol=stock_id, period="daily", start_date=f"{start_year}0101", end_date=f"{end_year}1231", adjust="qfq"
+    try:
+        price_providers = _build_providers(
+            [
+                (
+                    "em",
+                    "stock_zh_a_hist",
+                    {
+                        "symbol": stock_id,
+                        "period": "daily",
+                        "start_date": f"{start_year}0101",
+                        "end_date": f"{end_year}1231",
+                        "adjust": "qfq",
+                    },
+                ),
+                (
+                    "sina",
+                    "stock_zh_a_daily",
+                    {
+                        "symbol": stock_id,
+                        "start_date": f"{start_year}0101",
+                        "end_date": f"{end_year}1231",
+                        "adjust": "qfq",
+                    },
+                ),
+                (
+                    "tx",
+                    "stock_zh_a_hist_tx",
+                    {
+                        "symbol": stock_id,
+                        "start_date": f"{start_year}0101",
+                        "end_date": f"{end_year}1231",
+                        "adjust": "qfq",
+                    },
+                ),
+                (
+                    "netease",
+                    "stock_zh_a_hist_163",
+                    {
+                        "symbol": stock_id,
+                        "start_date": f"{start_year}0101",
+                        "end_date": f"{end_year}1231",
+                        "adjust": "qfq",
+                    },
+                ),
+                (
+                    "xq",
+                    "stock_zh_a_hist_xq",
+                    {
+                        "symbol": stock_id,
+                        "start_date": f"{start_year}0101",
+                        "end_date": f"{end_year}1231",
+                        "adjust": "qfq",
+                    },
+                ),
+            ]
+        )
+        stock_zh_a_hist_df, _ = _call_with_fallbacks(price_providers, validator=_is_non_empty_df)
+    except Exception:
+        try:
+            market_prefix = "sh" if stock_id.startswith("6") else "sz"
+            stock_zh_a_hist_df = _call_with_retry(
+                ak.stock_zh_a_daily,
+                symbol=f"{market_prefix}{stock_id}",
+                start_date=f"{start_year}0101",
+                end_date=f"{end_year}1231",
+                adjust="qfq",
+            )
+            stock_zh_a_hist_df = stock_zh_a_hist_df.rename(columns={"date": "日期", "close": "收盘"})
+            stock_zh_a_hist_df["日期"] = pd.to_datetime(stock_zh_a_hist_df["日期"])
+            last_trading_days = (
+                stock_zh_a_hist_df.sort_values("日期").groupby(stock_zh_a_hist_df["日期"].dt.year, as_index=False).last()
+            )
+            return last_trading_days[["日期", "收盘"]].sort_values("日期", ascending=False)
+        except Exception:
+            return get_year_gj_xl(stock_id, start_year, end_year)
+
+    # 将日期列转换为日期时间格式
+    stock_zh_a_hist_df["日期"] = pd.to_datetime(stock_zh_a_hist_df["日期"])
+
+    # 按年份分组并获取每年的最后一个交易日数据
+    last_trading_days = (
+        stock_zh_a_hist_df.sort_values("日期").groupby(stock_zh_a_hist_df["日期"].dt.year, as_index=False).last()
+    )
+
+    selected_columns = [
+        "日期",
+        "收盘",
+    ]
+    last_trading_days = last_trading_days[selected_columns].sort_values("日期", ascending=False)
+
+    # 打印结果
+    # print(last_trading_days)
+    return last_trading_days
+
+
+def get_year_gj_xl(stock_id, start_year="2020", end_year="2025"):
+    # 获取股票历史数据
+    stock_zh_a_hist_df = _call_with_retry(
+        ak.stock_zh_a_hist,
+        symbol=stock_id, period="monthly", start_date=f"{start_year}0101", end_date=f"{end_year}1231", adjust="qfq"
     )
 
     # 将日期列转换为日期时间格式
@@ -157,16 +365,24 @@ def get_year_gj(stock_id, start_year="2020", end_year="2025"):
     return last_trading_days
 
 
+
 def get_sxl(stock_id, start_date: str = "19700101", end_date: str = "20500101"):
     """查询股东户数，按日期区间筛选，并保存为csv"""
 
     # 尝试获取股票详细信息
     # df = ak.stock_value_em(symbol=stock_id)
     try:
-        # 尝试获取数据
-        df = ak.stock_value_em(symbol=stock_id)
-    except Exception as e:
-        # 捕获所有可能的异常并打印信息
+        sxl_providers = _build_providers(
+            [
+                ("em", "stock_value_em", {"symbol": stock_id}),
+                ("ths", "stock_value_ths", {"symbol": stock_id}),
+                ("sina", "stock_value_sina", {"symbol": stock_id}),
+                ("tx", "stock_value_tx", {"symbol": stock_id}),
+                ("netease", "stock_value_163", {"symbol": stock_id}),
+            ]
+        )
+        df, _ = _call_with_fallbacks(sxl_providers, validator=_is_non_empty_df)
+    except Exception:
         return None
 
 
