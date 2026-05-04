@@ -12,7 +12,7 @@ import utils
 
 
 ROOT_DIR = Path("/home/peanut/stock_key_info/all_stocks_20260505")
-TEMPLATE_ROOT = Path("/home/peanut/stock_key_info/all_stocks_copy")
+TEMPLATE_ROOT = Path("/home/peanut/stock_key_info/all_stocks_base")
 DONE_FILE_NAME = "scrape_done.csv"
 START_YEAR = "2010" 
 END_YEAR = "2026"
