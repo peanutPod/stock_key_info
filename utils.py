@@ -150,6 +150,7 @@ def get_key_indicator_ths(stock_id: str, start_time, end_time,debug=False):
         "净利润同比增长率",
         "扣非净利润",
         "扣非净利润同比增长率",
+        "基本每股收益",
         "每股净资产",
         "每股经营现金流",
         "销售净利率",
@@ -383,9 +384,7 @@ def get_sxl(stock_id, start_date: str = "19700101", end_date: str = "20500101"):
         )
         df, _ = _call_with_fallbacks(sxl_providers, validator=_is_non_empty_df)
     except Exception:
-        return None
-
-
+        return pd.DataFrame(columns=["数据日期", "总股本", "年份"])
 
     df["数据日期"] = pd.to_datetime(df["数据日期"])
     # 按日期区间筛选
@@ -398,7 +397,65 @@ def get_sxl(stock_id, start_date: str = "19700101", end_date: str = "20500101"):
     # 户均持股市值换算成万元，保留两位有效数字
     df["总股本"] = (df["总股本"] / 1e8).round(4)
     # 增减比例换算成百分比,这里本身得到的数据就是百分比
-    # 按年份分组，取每组最后一条
-    df = df.sort_values("数据日期", ascending=False).groupby(df["数据日期"].dt.year).head(1)
-
+    df["年份"] = df["数据日期"].dt.year
     return df
+
+
+def get_dividend_df(stock_code: str):
+    """
+    获取股票分红数据，按年累加现金红利。
+    支持 ak.stock_dividend_cninfo 返回的派息比例字段，并将 10 股派息转换为每股股息。
+    """
+    try:
+        df = _call_with_retry(ak.stock_dividend_cninfo, symbol=stock_code)
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["年份", "年现金红利"])
+
+        df = df.copy()
+
+        if "除权日" in df.columns:
+            df["除权日"] = pd.to_datetime(df["除权日"], errors="coerce")
+            df["年份"] = df["除权日"].dt.year
+        elif "实施方案公告日期" in df.columns:
+            df["实施方案公告日期"] = pd.to_datetime(df["实施方案公告日期"], errors="coerce")
+            df["年份"] = df["实施方案公告日期"].dt.year
+        else:
+            df["年份"] = pd.Series(dtype="Int64")
+
+        if "现金红利" in df.columns:
+            df["现金红利"] = pd.to_numeric(df["现金红利"], errors="coerce")
+            df["年现金红利"] = df["现金红利"]
+        elif "派息比例" in df.columns:
+            df["派息比例"] = pd.to_numeric(df["派息比例"], errors="coerce")
+            df["年现金红利"] = df["派息比例"] / 10.0
+        else:
+            df["年现金红利"] = pd.Series(dtype="float64")
+
+        annual_dividend = df.groupby("年份")["年现金红利"].sum().reset_index()
+        return annual_dividend
+    except Exception:
+        return pd.DataFrame(columns=["年份", "年现金红利"])
+
+
+def get_controlling_shareholder(stock_id: str):
+    try:
+        df = _call_with_retry(ak.stock_main_stock_holder, stock=stock_id)
+        if df is None or df.empty:
+            return None
+        df = df.copy()
+        if "截至日期" in df.columns:
+            df["截至日期"] = pd.to_datetime(df["截至日期"], errors="coerce")
+        if "持股比例" in df.columns:
+            df["持股比例"] = pd.to_numeric(df["持股比例"], errors="coerce")
+
+        latest_date = df["截至日期"].max() if "截至日期" in df.columns else pd.NaT
+        latest_df = df[df["截至日期"] == latest_date] if pd.notna(latest_date) else df
+        if latest_df.empty:
+            latest_df = df
+        if "持股比例" in latest_df.columns:
+            latest_df = latest_df.sort_values("持股比例", ascending=False)
+        if "股东名称" in latest_df.columns:
+            return str(latest_df.iloc[0]["股东名称"]).strip()
+        return None
+    except Exception:
+        return None

@@ -11,7 +11,7 @@ from tqdm import tqdm
 import utils
 
 
-ROOT_DIR = Path("/home/peanut/stock_key_info/all_stocks_20260505")
+ROOT_DIR = Path("/home/peanut/stock_key_info/all_stocks_20260513")
 TEMPLATE_ROOT = Path("/home/peanut/stock_key_info/all_stocks_base")
 DONE_FILE_NAME = "scrape_done.csv"
 START_YEAR = "2010" 
@@ -24,17 +24,23 @@ OUTPUT_COLUMNS = [
     "总市值",
     "总股本",
     "收盘",
-    "市销率",
     "营业总收入(亿)",
     "营业总收入同比增长率",
     "净利润(亿)",
     "净利润同比增长率",
     "每股净资产",
+    "市销率(PS)",
+    "市盈率(PE)",
+    "市净率(PB)",
+    "评价指标",
     "总现金",
     "未分配利润",
     "销售净利率",
     "股东权益",
     "存货",
+    "股息",
+    "ST风险",
+    "控股股东",
 ]
 
 EXPLICIT_INDUSTRY_MAP = {
@@ -263,6 +269,145 @@ def annualized_ps_ratio(report_period: str):
     return 1.0
 
 
+PS_INDUSTRIES = {
+    "互联网服务",
+    "软件开发",
+    "通信服务",
+    "文化传媒",
+    "游戏",
+    "教育",
+    "旅游酒店",
+    "商业百货",
+    "家用轻工",
+    "消费电子",
+    "电子元件",
+    "电子化学品",
+    "计算机设备",
+}
+
+PB_INDUSTRIES = {
+    "银行",
+    "保险",
+    "证券",
+    "多元金融",
+    "房地产开发",
+    "房地产服务",
+    "公用事业",
+    "电力行业",
+    "煤炭行业",
+    "石油行业",
+    "有色金属",
+    "钢铁行业",
+    "采掘行业",
+}
+
+HEALTH_INDUSTRIES = {
+    "医药商业",
+    "化学制药",
+    "中药",
+    "生物制品",
+    "医疗器械",
+    "医疗服务",
+}
+
+
+def get_valuation_preference(industry: str) -> list[str]:
+    if industry in PS_INDUSTRIES:
+        return ["PS", "PE"]
+    if industry in PB_INDUSTRIES:
+        return ["PB", "PE"]
+    if industry in HEALTH_INDUSTRIES:
+        return ["PE", "PS"]
+    return ["PE", "PB"]
+
+
+def build_evaluation_indicator(latest_row: pd.Series, industry: str) -> str:
+    if latest_row is None or latest_row.empty:
+        return ""
+    preferences = get_valuation_preference(industry)
+    indicators = []
+
+    for indicator in preferences:
+        if indicator == "PS" and "市销率(PS)" in latest_row.index:
+            indicators.append("PS")
+        elif indicator == "PE" and "市盈率(PE)" in latest_row.index:
+            indicators.append("PE")
+        elif indicator == "PB" and "市净率(PB)" in latest_row.index:
+            indicators.append("PB")
+        if len(indicators) == 2:
+            break
+
+    if len(indicators) < 2:
+        for indicator in ["PE", "PB", "PS"]:
+            if indicator in indicators:
+                continue
+            if indicator == "PS" and "市销率(PS)" in latest_row.index:
+                indicators.append("PS")
+            elif indicator == "PE" and "市盈率(PE)" in latest_row.index:
+                indicators.append("PE")
+            elif indicator == "PB" and "市净率(PB)" in latest_row.index:
+                indicators.append("PB")
+            if len(indicators) == 2:
+                break
+
+    return "；".join(indicators)
+
+
+def compute_st_risk(merged_df: pd.DataFrame) -> str | None:
+    if merged_df is None or merged_df.empty:
+        return None
+    latest_row = merged_df.iloc[0]
+    reasons = []
+    score = 0
+
+    net_profit = pd.to_numeric(latest_row.get("净利润(亿)"), errors="coerce")
+    revenue_yoy = latest_row.get("营业总收入同比增长率")
+    profit_yoy = latest_row.get("净利润同比增长率")
+
+    if pd.notna(net_profit) and net_profit < 0:
+        reasons.append("最新年度净利润亏损")
+        score += 40
+
+    if pd.notna(revenue_yoy):
+        try:
+            revenue_value = float(str(revenue_yoy).replace("%", ""))
+            if revenue_value < 0:
+                reasons.append("最新年度营业收入下滑")
+                score += 20
+        except ValueError:
+            pass
+
+    if pd.notna(profit_yoy):
+        try:
+            profit_value = float(str(profit_yoy).replace("%", ""))
+            if profit_value < 0:
+                reasons.append("最新年度净利润同比下降")
+                score += 20
+        except ValueError:
+            pass
+
+    if "净利润(亿)" in merged_df.columns:
+        losses = pd.to_numeric(merged_df["净利润(亿)"], errors="coerce")
+        if losses.lt(0).sum() >= 2:
+            reasons.append("连续两年亏损")
+            score += 30
+
+    if score <= 0:
+        return None
+
+    score = min(score, 100)
+    unique_reasons = "；".join(dict.fromkeys(reasons))
+    return f"{score}%: {unique_reasons}"
+
+
+def format_latest_st_risk(merged_df: pd.DataFrame) -> pd.Series:
+    st_risk = compute_st_risk(merged_df)
+    result = pd.Series([pd.NA] * len(merged_df), index=merged_df.index)
+    if st_risk:
+        result.iloc[0] = st_risk
+    return result
+
+
 def fetch_current_universe():
     df = utils._call_with_retry(ak.stock_info_a_code_name)
     df = df.rename(columns={"code": "股票代码", "name": "股票简称"}).copy()
@@ -298,7 +443,7 @@ def build_empty_year_df(column_name: str):
 
 def ensure_year_column(df: pd.DataFrame, date_column: str):
     if df is None:
-        return build_empty_year_df(date_column)
+        return pd.DataFrame(columns=[date_column, "总股本", "年份"])
     result = df.copy()
     if "年份" not in result.columns:
         result["年份"] = pd.Series(dtype="Int64")
@@ -312,6 +457,7 @@ def merge_stock_frames(stock_code: str):
     gdqy_df = utils.get_gdqy(stock_code, START_YEAR, END_YEAR)
     sxl_df = utils.get_sxl(stock_code, start_date=f"{START_YEAR}0101", end_date=END_DATE)
     price_df = utils.get_year_gj_dfcf(stock_code, START_YEAR, END_YEAR)
+    dividend_df = utils.get_dividend_df(stock_code)
 
     if key_indicator_df is None or key_indicator_df.empty:
         raise ValueError("关键指标为空")
@@ -322,14 +468,23 @@ def merge_stock_frames(stock_code: str):
     gdqy_df = gdqy_df.copy()
     sxl_df = ensure_year_column(sxl_df, "数据日期")
     price_df = ensure_year_column(price_df, "日期")
+    dividend_df["年份"] = dividend_df["年份"].astype(int)
 
     key_indicator_df["年份"] = key_indicator_df["报告期"].astype(str).str[:4].astype(int)
     gdqy_df["年份"] = gdqy_df["报告期"].astype(str).str[:4].astype(int)
+
+    # 去重关键指标
+    key_indicator_df.drop_duplicates(subset=["报告期"], inplace=True)
+    gdqy_df.drop_duplicates(subset=["报告期"], inplace=True)
+    sxl_df.drop_duplicates(subset=["年份"], inplace=True)
+    price_df.drop_duplicates(subset=["年份"], inplace=True)
+    dividend_df.drop_duplicates(subset=["年份"], inplace=True)
 
     merged_df = key_indicator_df.copy()
     merged_df = pd.merge(merged_df, sxl_df, on="年份", how="left")
     merged_df = pd.merge(merged_df, gdqy_df, on="年份", how="left")
     merged_df = pd.merge(merged_df, price_df, on="年份", how="left")
+    merged_df = pd.merge(merged_df, dividend_df, on="年份", how="left")
 
     merged_df.drop(
         columns=[
@@ -357,6 +512,10 @@ def merge_stock_frames(stock_code: str):
 
     merged_df["报告期"] = merged_df["报告期"].astype(str)
     merged_df.sort_values(by=["报告期"], ascending=[False], inplace=True)
+    # 只保留年度数据（报告期为年度或以-12-31结尾）
+    merged_df = merged_df[(merged_df["报告期"].str.len() == 4) | (merged_df["报告期"].str.endswith("-12-31"))].copy()
+    # 去重
+    merged_df.drop_duplicates(subset=["报告期"], inplace=True)
     merged_df["营业总收入(亿)"] = merged_df["营业总收入(亿)"].apply(parse_amount_to_yi)
 
     merged_df["总股本"] = pd.to_numeric(merged_df["总股本"], errors="coerce")
@@ -367,7 +526,32 @@ def merge_stock_frames(stock_code: str):
     market_cap_series = pd.to_numeric(merged_df["总市值"], errors="coerce")
     annualized_factor = pd.to_numeric(merged_df["报告期"].apply(annualized_ps_ratio), errors="coerce")
     ps_ratio = np.where(revenue_series > 0, market_cap_series / revenue_series * annualized_factor, np.nan)
-    merged_df["市销率"] = pd.Series(ps_ratio, index=merged_df.index, dtype="float64").round(4)
+    merged_df["市销率(PS)"] = pd.Series(ps_ratio, index=merged_df.index, dtype="float64").round(4)
+
+    merged_df["基本每股收益"] = pd.to_numeric(merged_df.get("基本每股收益"), errors="coerce")
+    merged_df["每股净资产"] = pd.to_numeric(merged_df.get("每股净资产"), errors="coerce")
+    merged_df["市盈率(PE)"] = np.where(
+        merged_df["基本每股收益"] > 0,
+        merged_df["收盘"] / merged_df["基本每股收益"],
+        np.nan,
+    )
+    merged_df["市净率(PB)"] = np.where(
+        merged_df["每股净资产"] > 0,
+        merged_df["收盘"] / merged_df["每股净资产"],
+        np.nan,
+    )
+    merged_df["市盈率(PE)"] = merged_df["市盈率(PE)"].round(4)
+    merged_df["市净率(PB)"] = merged_df["市净率(PB)"].round(4)
+
+    # 计算年股息率
+    # 计算股息，优先使用年现金红利字段
+    if "年现金红利" in merged_df.columns:
+        merged_df["股息"] = pd.to_numeric(merged_df["年现金红利"], errors="coerce")
+    elif "现金红利" in merged_df.columns:
+        merged_df["股息"] = pd.to_numeric(merged_df["现金红利"], errors="coerce")
+    else:
+        merged_df["股息"] = np.nan
+    merged_df.drop(columns=["年现金红利"], errors="ignore", inplace=True)
 
     return merged_df[[column for column in OUTPUT_COLUMNS if column in merged_df.columns]]
 
@@ -386,6 +570,13 @@ def process_stock(stock_row, batch_industry_map, dry_run=False):
     merged_df = merge_stock_frames(stock_code)
     if merged_df.empty:
         raise ValueError("合并结果为空")
+
+    controlling_shareholder = utils.get_controlling_shareholder(stock_code)
+    merged_df["控股股东"] = controlling_shareholder if controlling_shareholder else pd.NA
+    merged_df["ST风险"] = format_latest_st_risk(merged_df)
+    merged_df["评价指标"] = build_evaluation_indicator(merged_df.iloc[0], mapped_industry)
+
+    merged_df = merged_df[[column for column in OUTPUT_COLUMNS if column in merged_df.columns]]
 
     if not dry_run:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -486,6 +677,8 @@ def run(
         "失败": len(failures),
         "删除旧文件": len(removed_files),
         "已跳过": skipped,
+        "新增股票": len(stocks),
+        "删除股票": len(removed_files),
     }
 
     summary_path = ROOT_DIR / "scrape_summary.json"
