@@ -340,6 +340,98 @@ def get_year_gj_dfcf(stock_id, start_year="2020", end_year="2025"):
     return last_trading_days
 
 
+def get_latest_trade_day(stock_id, start_year="2010", end_date=None):
+    if end_date is None:
+        end_date = pd.Timestamp.now().strftime("%Y%m%d")
+    try:
+        price_providers = _build_providers(
+            [
+                (
+                    "em",
+                    "stock_zh_a_hist",
+                    {
+                        "symbol": stock_id,
+                        "period": "daily",
+                        "start_date": f"{start_year}0101",
+                        "end_date": end_date,
+                        "adjust": "qfq",
+                    },
+                ),
+                (
+                    "sina",
+                    "stock_zh_a_daily",
+                    {
+                        "symbol": stock_id,
+                        "start_date": f"{start_year}0101",
+                        "end_date": end_date,
+                        "adjust": "qfq",
+                    },
+                ),
+                (
+                    "tx",
+                    "stock_zh_a_hist_tx",
+                    {
+                        "symbol": stock_id,
+                        "start_date": f"{start_year}0101",
+                        "end_date": end_date,
+                        "adjust": "qfq",
+                    },
+                ),
+                (
+                    "netease",
+                    "stock_zh_a_hist_163",
+                    {
+                        "symbol": stock_id,
+                        "start_date": f"{start_year}0101",
+                        "end_date": end_date,
+                        "adjust": "qfq",
+                    },
+                ),
+                (
+                    "xq",
+                    "stock_zh_a_hist_xq",
+                    {
+                        "symbol": stock_id,
+                        "start_date": f"{start_year}0101",
+                        "end_date": end_date,
+                        "adjust": "qfq",
+                    },
+                ),
+            ]
+        )
+        stock_zh_a_hist_df, _ = _call_with_fallbacks(price_providers, validator=_is_non_empty_df)
+    except Exception:
+        try:
+            market_prefix = "sh" if stock_id.startswith("6") else "sz"
+            stock_zh_a_hist_df = _call_with_retry(
+                ak.stock_zh_a_daily,
+                symbol=f"{market_prefix}{stock_id}",
+                start_date=f"{start_year}0101",
+                end_date=end_date,
+                adjust="qfq",
+            )
+            stock_zh_a_hist_df = stock_zh_a_hist_df.rename(columns={"date": "日期", "close": "收盘"})
+            stock_zh_a_hist_df["日期"] = pd.to_datetime(stock_zh_a_hist_df["日期"])
+            stock_zh_a_hist_df = stock_zh_a_hist_df[stock_zh_a_hist_df["日期"] <= pd.to_datetime(end_date, format="%Y%m%d")]
+            if stock_zh_a_hist_df.empty:
+                return pd.DataFrame(columns=["日期", "收盘"])
+            return stock_zh_a_hist_df.sort_values("日期").iloc[[-1]][["日期", "收盘"]].reset_index(drop=True)
+        except Exception:
+            return pd.DataFrame(columns=["日期", "收盘"])
+
+    if "date" in stock_zh_a_hist_df.columns:
+        stock_zh_a_hist_df = stock_zh_a_hist_df.rename(columns={"date": "日期", "close": "收盘"})
+    stock_zh_a_hist_df["日期"] = pd.to_datetime(stock_zh_a_hist_df["日期"])
+    start_dt = pd.to_datetime(f"{start_year}0101", format="%Y%m%d")
+    end_dt = pd.to_datetime(end_date, format="%Y%m%d")
+    stock_zh_a_hist_df = stock_zh_a_hist_df[stock_zh_a_hist_df["日期"].between(start_dt, end_dt)]
+    if stock_zh_a_hist_df.empty:
+        return pd.DataFrame(columns=["日期", "收盘"])
+    last_row = stock_zh_a_hist_df.sort_values("日期").iloc[[-1]].copy()
+    last_row["收盘"] = pd.to_numeric(last_row["收盘"], errors="coerce")
+    return last_row[["日期", "收盘"]].reset_index(drop=True)
+
+
 def get_year_gj_xl(stock_id, start_year="2020", end_year="2025"):
     # 获取股票历史数据
     stock_zh_a_hist_df = _call_with_retry(

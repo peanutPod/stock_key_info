@@ -11,7 +11,7 @@ from tqdm import tqdm
 import utils
 
 
-ROOT_DIR = Path("/home/peanut/stock_key_info/all_stocks_20260513")
+ROOT_DIR = Path("/home/peanut/stock_key_info/all_stocks_20260606")
 TEMPLATE_ROOT = Path("/home/peanut/stock_key_info/all_stocks_base")
 DONE_FILE_NAME = "scrape_done.csv"
 START_YEAR = "2010" 
@@ -457,6 +457,7 @@ def merge_stock_frames(stock_code: str):
     gdqy_df = utils.get_gdqy(stock_code, START_YEAR, END_YEAR)
     sxl_df = utils.get_sxl(stock_code, start_date=f"{START_YEAR}0101", end_date=END_DATE)
     price_df = utils.get_year_gj_dfcf(stock_code, START_YEAR, END_YEAR)
+    latest_trade_df = utils.get_latest_trade_day(stock_code, START_YEAR, pd.Timestamp.now().strftime("%Y%m%d"))
     dividend_df = utils.get_dividend_df(stock_code)
 
     if key_indicator_df is None or key_indicator_df.empty:
@@ -512,8 +513,57 @@ def merge_stock_frames(stock_code: str):
 
     merged_df["报告期"] = merged_df["报告期"].astype(str)
     merged_df.sort_values(by=["报告期"], ascending=[False], inplace=True)
-    # 只保留年度数据（报告期为年度或以-12-31结尾）
-    merged_df = merged_df[(merged_df["报告期"].str.len() == 4) | (merged_df["报告期"].str.endswith("-12-31"))].copy()
+    current_year = pd.Timestamp.now().year
+    # 保留年度数据（报告期为年度或以-12-31结尾），以及当年最新报告期/交易日数据
+    report_year = pd.to_numeric(merged_df["报告期"].str[:4], errors="coerce")
+    merged_df = merged_df[
+        (merged_df["报告期"].str.len() == 4)
+        | (merged_df["报告期"].str.endswith("-12-31"))
+        | (report_year == current_year)
+    ].copy()
+
+    report_year = pd.to_numeric(merged_df["报告期"].str[:4], errors="coerce")
+    current_year_rows = merged_df[report_year == current_year].copy()
+    if not current_year_rows.empty:
+        latest_current_year_row = current_year_rows.sort_values("报告期", ascending=False).head(1).copy()
+        merged_df = merged_df[report_year != current_year].copy()
+        merged_df = pd.concat([merged_df, latest_current_year_row], ignore_index=True)
+    else:
+        latest_current_year_row = pd.DataFrame()
+
+    current_year_yearend = pd.DataFrame()
+    if not latest_current_year_row.empty:
+        current_year_yearend = latest_current_year_row[
+            latest_current_year_row["报告期"].str.len() == 4
+            | latest_current_year_row["报告期"].str.endswith("-12-31")
+        ]
+
+    if not latest_current_year_row.empty and current_year_yearend.empty and not latest_trade_df.empty:
+        latest_report_row = latest_current_year_row.iloc[0].copy()
+        latest_trade_date = latest_trade_df.iloc[0]["日期"]
+        latest_trade_close = latest_trade_df.iloc[0]["收盘"]
+
+        if "总股本" in latest_report_row.index:
+            sxl_latest = sxl_df.copy()
+            if "数据日期" in sxl_latest.columns:
+                sxl_latest["数据日期"] = pd.to_datetime(sxl_latest["数据日期"], errors="coerce")
+                sxl_current_year = sxl_latest[sxl_latest["年份"] == current_year]
+                if not sxl_current_year.empty:
+                    latest_report_row["总股本"] = sxl_current_year.sort_values("数据日期").iloc[-1]["总股本"]
+                elif not sxl_latest.empty:
+                    latest_report_row["总股本"] = sxl_latest.sort_values("数据日期").iloc[-1]["总股本"]
+
+        latest_report_row["报告期"] = latest_trade_date.strftime("%Y-%m-%d")
+        latest_report_row["收盘"] = pd.to_numeric(latest_trade_close, errors="coerce")
+        latest_report_row["总股本"] = pd.to_numeric(latest_report_row.get("总股本"), errors="coerce")
+        if pd.notna(latest_report_row.get("总股本")) and pd.notna(latest_report_row["收盘"]):
+            latest_report_row["总市值"] = (latest_report_row["总股本"] * latest_report_row["收盘"]).round(3)
+        else:
+            latest_report_row["总市值"] = pd.NA
+
+        merged_df = pd.concat([merged_df, latest_report_row.to_frame().T], ignore_index=True)
+        merged_df.sort_values(by=["报告期"], ascending=[False], inplace=True)
+
     # 去重
     merged_df.drop_duplicates(subset=["报告期"], inplace=True)
     merged_df["营业总收入(亿)"] = merged_df["营业总收入(亿)"].apply(parse_amount_to_yi)
